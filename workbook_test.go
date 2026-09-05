@@ -200,3 +200,36 @@ func TestMappingResolve(t *testing.T) {
 		t.Fatalf("mapping update: %+v", res)
 	}
 }
+
+func TestApplyDaqiPriceEmptyPorter(t *testing.T) {
+	path := "3-16模版数据公式.xlsx"
+	if _, err := os.Stat(path); err != nil {
+		t.Skip("template missing")
+	}
+	wb, err := openWorkbook(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wb.close()
+
+	hits, err := wb.findByName(kindOut, "软牡丹")
+	if err != nil || len(hits) == 0 {
+		t.Fatal(hits, err)
+	}
+	h := hits[0]
+	_ = wb.file.SetCellValue(wb.sheet, h.PorterCell, "")
+	detail, err := wb.applyDaqiPrice(h, 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log(detail)
+	diff, _ := wb.file.GetCellValue(wb.sheet, h.DiffCell)
+	d, ok := parseFloat(diff)
+	if !ok || d != -150 {
+		t.Fatalf("expected 差=-150, got %q detail=%s", diff, detail)
+	}
+	f, _ := wb.file.GetCellFormula(wb.sheet, h.PriceCell)
+	if f == "" {
+		t.Fatal("formula should remain")
+	}
+}

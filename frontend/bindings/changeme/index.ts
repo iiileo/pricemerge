@@ -7,6 +7,13 @@ export {
 };
 
 export type {
+    BatchApplyResult,
+    BatchChangeRow,
+    BatchImportResult,
+    BatchPreviewItem,
+    BatchPreviewResult,
+    LogEntry,
+    LogInfo,
     StatusInfo,
     UpdateResult
 } from "./models.js";

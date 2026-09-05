@@ -11,7 +11,7 @@ import (
 var assets embed.FS
 
 func main() {
-	priceService := &PriceService{}
+	priceService := NewPriceService()
 
 	app := application.New(application.Options{
 		Name:        "pricemerge",
@@ -29,14 +29,16 @@ func main() {
 
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "PriceMerge",
-		Width:  720,
-		Height: 420,
+		Width:  980,
+		Height: 720,
+		MinWidth: 880,
+		MinHeight: 640,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 44,
 			Backdrop:                application.MacBackdropTranslucent,
 			TitleBar:                application.MacTitleBarHiddenInset,
 		},
-		BackgroundColour: application.NewRGB(243, 245, 248),
+		BackgroundColour: application.NewRGB(241, 244, 248),
 		URL:              "/",
 	})
 

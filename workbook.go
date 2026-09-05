@@ -329,17 +329,21 @@ func (w *workbookIndex) applyDaqiPrice(h nameHit, price float64) (string, error)
 		}
 		porter, ok := parseFloat(porterVal)
 		if !ok {
-			return "", fmt.Errorf("%s 搬运工不是数字: %q", h.PorterCell, porterVal)
+			// 搬运工为空/非数字时按 0 处理，只改「差」，保留大琪公式
+			porter = 0
 		}
 		diff := porter - price
 		if err := w.file.SetCellValue(w.sheet, h.DiffCell, diff); err != nil {
 			return "", err
 		}
-		// Re-assert 大琪 formula so it is not dropped by shared-formula edge cases.
 		if err := w.file.SetCellFormula(w.sheet, h.PriceCell, formula); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("%s(大琪公式保留) %s差=%v", h.PriceCell, h.DiffCell, diff), nil
+		detail := fmt.Sprintf("%s(大琪公式保留) %s差=%v", h.PriceCell, h.DiffCell, diff)
+		if !ok {
+			detail += fmt.Sprintf(" %s搬运工空按0", h.PorterCell)
+		}
+		return detail, nil
 	}
 
 	if err := w.file.SetCellValue(w.sheet, h.PriceCell, price); err != nil {

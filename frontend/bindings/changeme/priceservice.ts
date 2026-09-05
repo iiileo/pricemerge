@@ -15,6 +15,27 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as $models from "./models.js";
 
 /**
+ * AppendLog writes a log line to memory and the log file.
+ */
+export function AppendLog(level: string, message: string): $CancellablePromise<$models.LogEntry> {
+    return $Call.ByID(3899591058, level, message);
+}
+
+/**
+ * ApplyPendingBatch writes pending preview items into the base workbook.
+ */
+export function ApplyPendingBatch(): $CancellablePromise<$models.BatchApplyResult> {
+    return $Call.ByID(1662675113);
+}
+
+/**
+ * ClearLogs clears in-memory logs and empties the log file.
+ */
+export function ClearLogs(): $CancellablePromise<$models.LogInfo> {
+    return $Call.ByID(77781910);
+}
+
+/**
  * ClearMapping clears the name mapping.
  */
 export function ClearMapping(): $CancellablePromise<$models.StatusInfo> {
@@ -22,10 +43,31 @@ export function ClearMapping(): $CancellablePromise<$models.StatusInfo> {
 }
 
 /**
+ * ClearPendingBatch clears the preview list.
+ */
+export function ClearPendingBatch(): $CancellablePromise<void> {
+    return $Call.ByID(578386228);
+}
+
+/**
  * Export writes the current workbook to path.
  */
 export function Export(path: string): $CancellablePromise<string> {
     return $Call.ByID(3869210830, path);
+}
+
+/**
+ * GetLogs returns recent log lines (newest first) and file path.
+ */
+export function GetLogs(): $CancellablePromise<$models.LogInfo> {
+    return $Call.ByID(4127686191);
+}
+
+/**
+ * ImportPriceSheet is kept for tests: preview + apply in one call.
+ */
+export function ImportPriceSheet(path: string, kind: string): $CancellablePromise<$models.BatchImportResult> {
+    return $Call.ByID(3776582389, path, kind);
 }
 
 /**
@@ -50,10 +92,31 @@ export function LoadMapping(path: string): $CancellablePromise<$models.StatusInf
 }
 
 /**
+ * PreviewPriceSheet extracts name/price pairs and looks up old prices; does not write.
+ */
+export function PreviewPriceSheet(path: string, kind: string): $CancellablePromise<$models.BatchPreviewResult> {
+    return $Call.ByID(1272546620, path, kind);
+}
+
+/**
  * Status returns current load state.
  */
 export function Status(): $CancellablePromise<$models.StatusInfo> {
     return $Call.ByID(1277627050);
+}
+
+/**
+ * UndoBatchAll restores all remaining updated rows to their old prices.
+ */
+export function UndoBatchAll(): $CancellablePromise<$models.BatchApplyResult> {
+    return $Call.ByID(4096350777);
+}
+
+/**
+ * UndoBatchRow restores one updated row to its old price.
+ */
+export function UndoBatchRow(index: number): $CancellablePromise<$models.BatchApplyResult> {
+    return $Call.ByID(2433776558, index);
 }
 
 /**
