@@ -14,8 +14,8 @@ func main() {
 	priceService := NewPriceService()
 
 	app := application.New(application.Options{
-		Name:        "pricemerge",
-		Description: "批量更新基础表出/接价格",
+		Name:        "PriceMerge",
+		Description: "出 / 接价格合并工具",
 		Services: []application.Service{
 			application.NewService(priceService),
 		},

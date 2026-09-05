@@ -107,7 +107,7 @@ func TestParseAndUpdateTemplate(t *testing.T) {
 
 func TestPriceServiceUpdateExport(t *testing.T) {
 	s := &PriceService{}
-	st, err := s.LoadDefaultTemplate()
+	st, err := s.LoadBase("3-16模版数据公式.xlsx")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestMappingResolve(t *testing.T) {
 	_ = f.Close()
 
 	s := &PriceService{}
-	if _, err := s.LoadDefaultTemplate(); err != nil {
+	if _, err := s.LoadBase("3-16模版数据公式.xlsx"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.LoadMapping(mapPath); err != nil {

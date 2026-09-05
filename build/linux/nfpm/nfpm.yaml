@@ -3,26 +3,26 @@
 #
 # The lines below are called `modelines`. See `:help modeline`
 
-name: "pricemerge"
+name: "PriceMerge"
 arch: ${GOARCH}
 platform: "linux"
-version: "0.1.0"
+version: "1.0.0"
 section: "default"
 priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-description: "A pricemerge application"
-vendor: "My Company"
+description: "出 / 接价格合并工具"
+vendor: "PriceMerge"
 homepage: "https://wails.io"
 license: "MIT"
 release: "1"
 
 contents:
-  - src: "./bin/pricemerge"
-    dst: "/usr/local/bin/pricemerge"
+  - src: "./bin/PriceMerge"
+    dst: "/usr/local/bin/PriceMerge"
   - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/128x128/apps/pricemerge.png"
+    dst: "/usr/share/icons/hicolor/128x128/apps/PriceMerge.png"
   - src: "./build/linux/pricemerge.desktop"
-    dst: "/usr/share/applications/pricemerge.desktop"
+    dst: "/usr/share/applications/PriceMerge.desktop"
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
 depends:

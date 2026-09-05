@@ -78,13 +78,6 @@ export function LoadBase(path: string): $CancellablePromise<$models.StatusInfo> 
 }
 
 /**
- * LoadDefaultTemplate loads the embedded default base workbook.
- */
-export function LoadDefaultTemplate(): $CancellablePromise<$models.StatusInfo> {
-    return $Call.ByID(1691547199);
-}
-
-/**
  * LoadMapping loads a two-column name mapping sheet: 其他表名称 | 基础表名称.
  */
 export function LoadMapping(path: string): $CancellablePromise<$models.StatusInfo> {

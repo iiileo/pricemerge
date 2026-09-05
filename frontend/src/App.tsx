@@ -82,6 +82,7 @@ function App() {
   const [resultOpen, setResultOpen] = useState(false)
   const [resultRows, setResultRows] = useState<BatchChangeRow[]>([])
   const [resultTitle, setResultTitle] = useState('')
+  const [mapTipOpen, setMapTipOpen] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
   const clickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -117,14 +118,12 @@ function App() {
       try {
         setBusy(true)
         await refreshLogs()
-        const s = await PriceService.LoadDefaultTemplate()
-        setStatus(s)
-        await show('info', '已加载基础表')
+        setStatus(await PriceService.Status())
+        setFlash({ type: 'info', text: '请先选择基础表' })
       } catch (e) {
         await show('err', String(e))
       } finally {
         setBusy(false)
-        nameRef.current?.focus()
       }
     })()
   }, [])
@@ -136,7 +135,8 @@ function App() {
       setBusy(true)
       const s = await PriceService.LoadBase(path)
       setStatus(s)
-      await show('info', debug ? `已加载 ${s.baseName} · ${s.blockCount} 个区块` : '已更换基础表')
+      await show('info', debug ? `已加载 ${s.baseName} · ${s.blockCount} 个区块` : '已加载基础表')
+      nameRef.current?.focus()
     } catch (e) {
       await show('err', String(e))
     } finally {
@@ -325,7 +325,7 @@ function App() {
     <main className={`app ${debug ? 'debug' : ''}`}>
       <header className="header">
         <div className="brand">
-          <span className="logo" aria-hidden="true" />
+          <img className="logo" src="./appicon.png" alt="" width={36} height={36} />
           <div className="brand-text">
             <div className="brand-line">
               <h1>PriceMerge</h1>
@@ -350,24 +350,36 @@ function App() {
                 <span className="label">基础表</span>
                 <strong className="ellipsis">{status.loaded ? status.baseName : '未加载'}</strong>
                 <span className="hint">
-                  {status.loaded ? (status.dirty ? '有未导出更改' : '已就绪') : '使用默认模版'}
+                  {status.loaded ? (status.dirty ? '有未导出更改' : '已就绪') : '请选择 Excel 基础表'}
                   {debug && status.loaded ? ` · ${status.blockCount} 区块` : ''}
                 </span>
               </div>
               <button className="btn ghost" disabled={busy} onClick={pickBase}>
-                更换
+                {status.loaded ? '更换' : '选择'}
               </button>
             </article>
 
-            <article
-              className="tile"
-              title="Excel 两列：A 其他表名称，B 基础表名称。首行可为表头（含「名称」字样会自动跳过）。"
-            >
+            <article className="tile">
               <div className="tile-body">
                 <span className="label">
                   名称映射
-                  <span className="tips" aria-label="格式说明">
+                  <span
+                    className={`tips${mapTipOpen ? ' on' : ''}`}
+                    tabIndex={0}
+                    aria-label="格式说明"
+                    onMouseEnter={() => setMapTipOpen(true)}
+                    onMouseLeave={() => setMapTipOpen(false)}
+                    onFocus={() => setMapTipOpen(true)}
+                    onBlur={() => setMapTipOpen(false)}
+                  >
                     ?
+                    {mapTipOpen ? (
+                      <span className="tips-pop" role="tooltip">
+                        Excel 两列：A 其他表名称，B 基础表名称。
+                        <br />
+                        首行可为表头（含「名称」字样会自动跳过）。
+                      </span>
+                    ) : null}
                   </span>
                 </span>
                 <strong>{status.mappingCount > 0 ? `${status.mappingCount} 条` : '未使用'}</strong>

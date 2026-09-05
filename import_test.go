@@ -20,7 +20,7 @@ func TestPreviewAndApplyBatch(t *testing.T) {
 	_ = f.Close()
 
 	s := &PriceService{}
-	if _, err := s.LoadDefaultTemplate(); err != nil {
+	if _, err := s.LoadBase("3-16模版数据公式.xlsx"); err != nil {
 		t.Fatal(err)
 	}
 	prev, err := s.PreviewPriceSheet(pricePath, "出")
@@ -69,7 +69,7 @@ func TestImportPriceSheet(t *testing.T) {
 	_ = f.Close()
 
 	s := &PriceService{}
-	if _, err := s.LoadDefaultTemplate(); err != nil {
+	if _, err := s.LoadBase("3-16模版数据公式.xlsx"); err != nil {
 		t.Fatal(err)
 	}
 	res, err := s.ImportPriceSheet(pricePath, "出")
@@ -103,7 +103,7 @@ func TestImportTwoColumnPriceSheet(t *testing.T) {
 	_ = f.Close()
 
 	s := &PriceService{}
-	if _, err := s.LoadDefaultTemplate(); err != nil {
+	if _, err := s.LoadBase("3-16模版数据公式.xlsx"); err != nil {
 		t.Fatal(err)
 	}
 	res, err := s.ImportPriceSheet(pricePath, "出")
@@ -131,7 +131,7 @@ func TestUndoBatchRowAndAll(t *testing.T) {
 	_ = f.Close()
 
 	s := &PriceService{}
-	if _, err := s.LoadDefaultTemplate(); err != nil {
+	if _, err := s.LoadBase("3-16模版数据公式.xlsx"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.PreviewPriceSheet(pricePath, "出"); err != nil {

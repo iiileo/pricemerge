@@ -162,30 +162,6 @@ func (s *PriceService) LoadBase(path string) (StatusInfo, error) {
 	return s.statusLocked(), nil
 }
 
-// LoadDefaultTemplate loads the embedded default base workbook.
-func (s *PriceService) LoadDefaultTemplate() (StatusInfo, error) {
-	data, err := defaultTemplateBytes()
-	if err != nil {
-		return StatusInfo{}, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	wb, err := openWorkbookBytes(data)
-	if err != nil {
-		return StatusInfo{}, err
-	}
-	if s.wb != nil {
-		_ = s.wb.close()
-	}
-	s.wb = wb
-	s.basePath = "3-16模版数据公式.xlsx"
-	s.dirty = false
-	s.pending = nil
-	s.lastApply = nil
-	return s.statusLocked(), nil
-}
-
 // LoadMapping loads a two-column name mapping sheet: 其他表名称 | 基础表名称.
 func (s *PriceService) LoadMapping(path string) (StatusInfo, error) {
 	s.mu.Lock()

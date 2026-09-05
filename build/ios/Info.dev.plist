@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>pricemerge</string>
+    <string>PriceMerge</string>
     <key>CFBundleIdentifier</key>
     <string>com.xin99.pricemerge.dev</string>
     <key>CFBundleName</key>
-    <string>My Product (Dev)</string>
+    <string>PriceMerge</string>
     <key>CFBundleDisplayName</key>
-    <string>My Product (Dev)</string>
+    <string>PriceMerge</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
