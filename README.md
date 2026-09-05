@@ -1,59 +1,119 @@
-# Welcome to Your New Wails3 Project!
+# PriceMerge
 
-Congratulations on generating your Wails3 application! This README will guide you through the next steps to get your project up and running.
+桌面工具：按品名更新基础 Excel 表中的 **出 / 接** 价格（大琪有效价），支持单条更新与批量导入。
 
-## Getting Started
+技术栈：[Wails v3](https://v3.wails.io/) + Go + React。
 
-1. Navigate to your project directory in the terminal.
+## 功能
 
-2. To run your application in development mode, use the following command:
+- **基础表**：自行选择模版 Excel（不再内置打包）
+- **单条更新**：名称 + 出/接 + 价格
+- **批量更新**：上传价格表 → 文件列表 → 查看预览 → 更新
+- **结果撤回**：更新后可单条或全部撤回
+- **名称映射**：其他表品名 → 基础表品名（可选）
+- **导出**：写出更新后的基础表
+- **操作日志**：本地记录；连点版本号 5 次开启调试模式
 
-   ```
-   wails3 dev
-   ```
+## 使用说明
 
-   This will start your application and enable hot-reloading for both frontend and backend changes.
+1. 启动后先点 **选择**，打开基础表（需含「出 / 接」区块与「大琪」列）
+2. 单条更新：输入名称、类型、价格后点 **更新**
+3. 批量更新：选类型 → **上传文件** → **查看** 确认 → **更新**
+4. 需要时加载名称映射表，再 **导出 Excel**
 
-3. To build your application for production, use:
+### 价格写入规则
 
-   ```
-   wails3 build
-   ```
+右侧源数据布局：`品名 | 搬运工 | 大琪 | 差`
 
-   This will create a production-ready executable in the `build` directory.
+- 目标是改 **大琪有效价**，尽量不改搬运工
+- 大琪有公式（`=搬运工-差`）时：只改「差」=`搬运工 - 新价`，保留公式
+- 搬运工为空时按 `0` 处理
 
-## Exploring Wails3 Features
+### 名称映射格式
 
-Now that you have your project set up, it's time to explore the features that Wails3 offers:
+Excel 两列：
 
-1. **Check out the examples**: The best way to learn is by example. Visit the `examples` directory in the `v3/examples` directory to see various sample applications.
+| A 其他表名称 | B 基础表名称 |
+| --- | --- |
+| 软牡丹别名 | 软牡丹 |
 
-2. **Run an example**: To run any of the examples, navigate to the example's directory and use:
+首行含「名称」字样会当作表头跳过。
 
-   ```
-   go run .
-   ```
+### 批量价格表
 
-   Note: Some examples may be under development during the alpha phase.
+支持常见写法，例如：
 
-3. **Explore the documentation**: Visit the [Wails3 documentation](https://v3.wails.io/) for in-depth guides and API references.
+- 两列：`名称 | 价格`
+- 混写：`软牡丹133`、`软牡丹123-133`
+- 同行多品、一格一品等
 
-4. **Join the community**: Have questions or want to share your progress? Join the [Wails Discord](https://discord.gg/JDdSxwjhGf) or visit the [Wails discussions on GitHub](https://github.com/wailsapp/wails/discussions).
+无价格的行不会提取；预览里会显示原价 / 新价 / 是否可匹配。
 
-## Project Structure
+## 开发
 
-Take a moment to familiarize yourself with your project structure:
+### 环境
 
-- `frontend/`: Contains your frontend code (HTML, CSS, JavaScript/TypeScript)
-- `main.go`: The entry point of your Go backend
-- `app.go`: Define your application structure and methods here
-- `wails.json`: Configuration file for your Wails project
+- Go 1.25+
+- Node 22+
+- [Wails CLI v3](https://v3.wails.io/)（本项目对应 `v3.0.0-beta.16`）
+- [Task](https://taskfile.dev/)（可选，`wails3` 会调用）
 
-## Next Steps
+```bash
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.16
+```
 
-1. Modify the frontend in the `frontend/` directory to create your desired UI.
-2. Add backend functionality in `main.go`.
-3. Use `wails3 dev` to see your changes in real-time.
-4. When ready, build your application with `wails3 build`.
+### 常用命令
 
-Happy coding with Wails3! If you encounter any issues or have questions, don't hesitate to consult the documentation or reach out to the Wails community.
+```bash
+# 开发（热重载）
+wails3 dev
+
+# 当前平台编译
+wails3 build
+
+# 打包（macOS → .app，Windows → 安装包流程）
+wails3 package
+
+# 测试
+go test ./...
+```
+
+产物在 `bin/`。
+
+### 版本号
+
+```bash
+python3 scripts/set-version.py 1.2.3
+```
+
+会同步 `build/config.yml`、macOS plist、Windows `info.json`、前端版本显示。
+
+## 发布
+
+GitHub Actions：`.github/workflows/build-release.yml`
+
+| 触发 | 说明 |
+| --- | --- |
+| 推送 tag `v*.*.*` | 例如 `git tag v1.0.0 && git push origin v1.0.0` |
+| 手动 workflow_dispatch | 填写版本号 |
+
+产物：
+
+- `PriceMerge-{version}-darwin-arm64.zip`
+- `PriceMerge-{version}-windows-amd64.exe`
+
+并自动创建 GitHub Release。
+
+## 目录结构
+
+```
+├── main.go / priceservice.go / workbook.go / extract.go
+├── frontend/                 # React UI
+├── build/                    # 图标、平台打包配置
+├── scripts/set-version.py    # 版本同步
+└── .github/workflows/        # CI 发布
+```
+
+## License
+
+按仓库实际声明为准。

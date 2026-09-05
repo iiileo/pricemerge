@@ -1,0 +1,157 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号，例如 1.2.3（可带或不带 v 前缀）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Resolve version
+        id: resolve
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            raw="${{ inputs.version }}"
+          else
+            raw="${GITHUB_REF_NAME}"
+          fi
+          raw="${raw#v}"
+          if [[ ! "$raw" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version: $raw" >&2
+            exit 1
+          fi
+          echo "version=$raw" >> "$GITHUB_OUTPUT"
+          echo "tag=v$raw" >> "$GITHUB_OUTPUT"
+          echo "Building PriceMerge $raw"
+
+  build:
+    name: ${{ matrix.name }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-14
+            goos: darwin
+            goarch: arm64
+            artifact: PriceMerge-${{ needs.version.outputs.version }}-darwin-arm64.zip
+          - name: Windows amd64
+            os: windows-latest
+            goos: windows
+            goarch: amd64
+            artifact: PriceMerge-${{ needs.version.outputs.version }}-windows-amd64.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Wails CLI
+        shell: bash
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.16
+
+      - name: Set version
+        shell: bash
+        run: |
+          python3 scripts/set-version.py "${{ needs.version.outputs.version }}"
+          echo "VERSION=${{ needs.version.outputs.version }}" >> "$GITHUB_ENV"
+
+      - name: Build macOS arm64 package
+        if: matrix.goos == 'darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          wails3 package GOOS=darwin GOARCH=arm64
+          test -d "bin/PriceMerge.app"
+          ditto -c -k --keepParent "bin/PriceMerge.app" "bin/${{ matrix.artifact }}"
+          ls -lh "bin/${{ matrix.artifact }}"
+
+      - name: Build Windows amd64
+        if: matrix.goos == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          wails3 build GOOS=windows GOARCH=amd64
+          test -f "bin/PriceMerge.exe"
+          cp "bin/PriceMerge.exe" "bin/${{ matrix.artifact }}"
+          ls -lh "bin/${{ matrix.artifact }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: bin/${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Create GitHub Release
+    needs: [version, build]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List release files
+        shell: bash
+        run: |
+          find dist -type f -print | sort
+          ls -lh dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: PriceMerge ${{ needs.version.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(needs.version.outputs.version, '-') }}
+          files: |
+            dist/PriceMerge-${{ needs.version.outputs.version }}-darwin-arm64.zip
+            dist/PriceMerge-${{ needs.version.outputs.version }}-windows-amd64.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
