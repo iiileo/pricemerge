@@ -86,6 +86,7 @@ function App() {
   const [resultTitle, setResultTitle] = useState('')
   const [mapTipOpen, setMapTipOpen] = useState(false)
   const [logDetail, setLogDetail] = useState<{ title: string; lines: string[] } | null>(null)
+  const [logDetailOpen, setLogDetailOpen] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
   const clickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const tourBooted = useRef(false)
@@ -631,12 +632,13 @@ function App() {
                       <button
                         type="button"
                         className="btn-text log-view"
-                        onClick={() =>
+                        onClick={() => {
                           setLogDetail({
                             title: friendlyMessage(entry.message, debug),
                             lines: entry.details ?? [],
                           })
-                        }
+                          setLogDetailOpen(true)
+                        }}
                       >
                         查看
                       </button>
@@ -746,13 +748,13 @@ function App() {
         </div>
       </Modal>
 
-      <Modal open={!!logDetail} onClose={() => setLogDetail(null)}>
+      <Modal open={logDetailOpen} onClose={() => setLogDetailOpen(false)}>
         <div className="modal-head">
           <div>
             <span className="label">更新明细</span>
             <strong>{logDetail?.title}</strong>
           </div>
-          <button className="btn ghost" onClick={() => setLogDetail(null)}>
+          <button className="btn ghost" onClick={() => setLogDetailOpen(false)}>
             关闭
           </button>
         </div>

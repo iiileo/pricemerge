@@ -12,6 +12,11 @@ type ModalProps = {
 export function Modal({ open, onClose, children }: ModalProps) {
   const [mounted, setMounted] = useState(open)
   const [phase, setPhase] = useState<'enter' | 'show' | 'leave'>(open ? 'enter' : 'leave')
+  const [cache, setCache] = useState(children)
+
+  useEffect(() => {
+    if (open) setCache(children)
+  }, [open, children])
 
   useEffect(() => {
     if (open) {
@@ -44,7 +49,7 @@ export function Modal({ open, onClose, children }: ModalProps) {
         role="dialog"
         aria-modal="true"
       >
-        {children}
+        {cache}
       </div>
     </div>
   )
