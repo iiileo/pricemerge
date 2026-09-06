@@ -293,7 +293,7 @@ func (w *workbookIndex) findByName(kind, name string) ([]nameHit, error) {
 		if b.DiffCol > 0 {
 			diffCell, _ = excelize.CoordinatesToCellName(b.DiffCol, r)
 		}
-		old, _ := w.file.GetCellValue(w.sheet, priceCell)
+		old := w.readDaqiPrice(priceCell, porterCell, diffCell)
 		hits = append(hits, nameHit{
 			Kind:       b.Kind,
 			Region:     b.Region,
@@ -307,6 +307,48 @@ func (w *workbookIndex) findByName(kind, name string) ([]nameHit, error) {
 		})
 	}
 	return hits, nil
+}
+
+// readDaqiPrice returns the effective 大琪 price.
+// Formula cells often have no/stale cached value after UpdateLinkedValue on export,
+// so when 大琪 is 搬运工-差 we compute it directly.
+func (w *workbookIndex) readDaqiPrice(priceCell, porterCell, diffCell string) string {
+	formula, _ := w.file.GetCellFormula(w.sheet, priceCell)
+	formula = strings.TrimSpace(formula)
+	if formula != "" && diffCell != "" {
+		porterVal, _ := w.file.GetCellValue(w.sheet, porterCell)
+		diffVal, _ := w.file.GetCellValue(w.sheet, diffCell)
+		porter, ok := parseFloat(porterVal)
+		if !ok {
+			porter = 0
+		}
+		diff, ok := parseFloat(diffVal)
+		if !ok {
+			diff = 0
+		}
+		// Skip pure-empty rows (section headers) that happen to sit in a price column.
+		if strings.TrimSpace(porterVal) == "" && strings.TrimSpace(diffVal) == "" {
+			if cached, _ := w.file.GetCellValue(w.sheet, priceCell); strings.TrimSpace(cached) != "" {
+				return strings.TrimSpace(cached)
+			}
+			return ""
+		}
+		return strconv.FormatFloat(porter-diff, 'f', -1, 64)
+	}
+
+	val, _ := w.file.GetCellValue(w.sheet, priceCell)
+	val = strings.TrimSpace(val)
+	if val != "" {
+		return val
+	}
+	if formula != "" {
+		if calc, err := w.file.CalcCellValue(w.sheet, priceCell); err == nil {
+			if calc = strings.TrimSpace(calc); calc != "" {
+				return calc
+			}
+		}
+	}
+	return ""
 }
 
 // applyDaqiPrice sets the effective 大琪 price without touching 搬运工.

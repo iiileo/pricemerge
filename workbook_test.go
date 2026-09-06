@@ -103,6 +103,16 @@ func TestParseAndUpdateTemplate(t *testing.T) {
 	if !ok || diffReloadNum != porterNum-199.5 {
 		t.Fatalf("差 after reload: %q", diffReload)
 	}
+
+	// UpdateLinkedValue clears formula caches; OldPrice must still resolve via 搬运工-差.
+	hits2, err := wb2.findByName(kindOut, "软牡丹")
+	if err != nil || len(hits2) == 0 {
+		t.Fatalf("find after reload: %v hits=%v", err, hits2)
+	}
+	oldNum, ok := parseFloat(hits2[0].OldPrice)
+	if !ok || oldNum != 199.5 {
+		t.Fatalf("OldPrice after export/reload want 199.5, got %q", hits2[0].OldPrice)
+	}
 }
 
 func TestPriceServiceUpdateExport(t *testing.T) {
