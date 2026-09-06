@@ -10,8 +10,8 @@ func TestAppLogPersistAndClear(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "t.log")
 	l := &appLog{path: path}
-	l.append("ok", "hello")
-	l.append("err", "boom")
+	l.append("ok", "hello", nil)
+	l.append("err", "boom", []string{"a → b"})
 
 	data, err := os.ReadFile(path)
 	if err != nil {

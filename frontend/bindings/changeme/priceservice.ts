@@ -17,8 +17,8 @@ import * as $models from "./models.js";
 /**
  * AppendLog writes a log line to memory and the log file.
  */
-export function AppendLog(level: string, message: string): $CancellablePromise<$models.LogEntry> {
-    return $Call.ByID(3899591058, level, message);
+export function AppendLog(level: string, message: string, details: string[] | null): $CancellablePromise<$models.LogEntry> {
+    return $Call.ByID(3899591058, level, message, details);
 }
 
 /**
@@ -54,6 +54,13 @@ export function ClearPendingBatch(): $CancellablePromise<void> {
  */
 export function Export(path: string): $CancellablePromise<string> {
     return $Call.ByID(3869210830, path);
+}
+
+/**
+ * ExportLogs saves current logs to the given path as a readable text file.
+ */
+export function ExportLogs(path: string): $CancellablePromise<string> {
+    return $Call.ByID(389389237, path);
 }
 
 /**

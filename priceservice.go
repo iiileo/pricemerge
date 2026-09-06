@@ -47,8 +47,8 @@ func (s *PriceService) ensureLog() *appLog {
 }
 
 // AppendLog writes a log line to memory and the log file.
-func (s *PriceService) AppendLog(level string, message string) LogEntry {
-	return s.ensureLog().append(level, message)
+func (s *PriceService) AppendLog(level string, message string, details []string) LogEntry {
+	return s.ensureLog().append(level, message, details)
 }
 
 // GetLogs returns recent log lines (newest first) and file path.
@@ -62,6 +62,21 @@ func (s *PriceService) ClearLogs() (LogInfo, error) {
 		return LogInfo{}, fmt.Errorf("清空日志失败: %w", err)
 	}
 	return s.ensureLog().info(), nil
+}
+
+// ExportLogs saves current logs to the given path as a readable text file.
+func (s *PriceService) ExportLogs(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("请选择保存路径")
+	}
+	if !strings.HasSuffix(strings.ToLower(path), ".txt") && !strings.HasSuffix(strings.ToLower(path), ".log") {
+		path += ".txt"
+	}
+	if err := s.ensureLog().exportTo(path); err != nil {
+		return "", fmt.Errorf("导出日志失败: %w", err)
+	}
+	return path, nil
 }
 
 // StatusInfo is returned to the frontend about current loaded state.
@@ -289,7 +304,10 @@ func (s *PriceService) updatePriceLocked(name string, kind string, price float64
 		if err != nil {
 			return UpdateResult{}, fmt.Errorf("写入失败: %w", err)
 		}
-		label := fmt.Sprintf("%s %s %s → %v（%s）", h.Kind, h.Region, h.OldPrice, price, detail)
+		label := fmt.Sprintf(
+			"%s（%s·%s）%s→%v · %s",
+			resolved, h.Kind, h.Region, emptyDash(h.OldPrice), price, detail,
+		)
 		updated = append(updated, label)
 	}
 	s.dirty = true
@@ -565,6 +583,14 @@ func parsePriceText(s string) (float64, bool) {
 		return 0, false
 	}
 	return f, true
+}
+
+func emptyDash(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // ImportPriceSheet is kept for tests: preview + apply in one call.

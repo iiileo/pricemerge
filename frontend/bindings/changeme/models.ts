@@ -80,6 +80,7 @@ export interface LogEntry {
      */
     "level": string;
     "message": string;
+    "details": string[] | null;
 }
 
 /**

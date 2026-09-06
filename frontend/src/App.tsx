@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Dialogs } from '@wailsio/runtime'
+import { Dialogs, Events } from '@wailsio/runtime'
 import { PriceService } from '../bindings/changeme'
 import type {
   BatchApplyResult,
@@ -11,6 +11,8 @@ import type {
   StatusInfo,
   UpdateResult,
 } from '../bindings/changeme/models'
+import { hasSeenTour, startTour } from './tour'
+import { Modal } from './Modal'
 
 const APP_VERSION = '1.0.0'
 const DEBUG_CLICKS = 5
@@ -83,8 +85,10 @@ function App() {
   const [resultRows, setResultRows] = useState<BatchChangeRow[]>([])
   const [resultTitle, setResultTitle] = useState('')
   const [mapTipOpen, setMapTipOpen] = useState(false)
+  const [logDetail, setLogDetail] = useState<{ title: string; lines: string[] } | null>(null)
   const nameRef = useRef<HTMLInputElement>(null)
   const clickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const tourBooted = useRef(false)
 
   const refreshLogs = useCallback(async () => {
     setLogInfo(await PriceService.GetLogs())
@@ -92,8 +96,7 @@ function App() {
 
   const show = async (type: 'ok' | 'err' | 'info', text: string, lines: string[] = []) => {
     setFlash({ type, text })
-    const extra = lines.length ? ` | ${lines.slice(0, 5).join('；')}` : ''
-    await PriceService.AppendLog(type, text + extra)
+    await PriceService.AppendLog(type, text, lines)
     await refreshLogs()
   }
 
@@ -102,11 +105,7 @@ function App() {
     const next = versionClicks + 1
     if (next >= DEBUG_CLICKS) {
       setVersionClicks(0)
-      setDebug((d) => {
-        const on = !d
-        void show('info', on ? '已开启调试模式' : '已关闭调试模式')
-        return on
-      })
+      setDebug((d) => !d)
       return
     }
     setVersionClicks(next)
@@ -124,6 +123,10 @@ function App() {
         await show('err', String(e))
       } finally {
         setBusy(false)
+        if (!tourBooted.current && !hasSeenTour()) {
+          tourBooted.current = true
+          window.setTimeout(() => startTour(), 350)
+        }
       }
     })()
   }, [])
@@ -131,6 +134,10 @@ function App() {
   const pickBase = async () => {
     const path = await Dialogs.OpenFile({ Title: '选择基础表', Filters: xlsxFilter })
     if (!path || typeof path !== 'string') return
+    await loadBase(path)
+  }
+
+  const loadBase = async (path: string) => {
     try {
       setBusy(true)
       const s = await PriceService.LoadBase(path)
@@ -147,6 +154,10 @@ function App() {
   const pickMapping = async () => {
     const path = await Dialogs.OpenFile({ Title: '选择名称映射表', Filters: xlsxFilter })
     if (!path || typeof path !== 'string') return
+    await loadMapping(path)
+  }
+
+  const loadMapping = async (path: string) => {
     try {
       setBusy(true)
       const s = await PriceService.LoadMapping(path)
@@ -183,10 +194,8 @@ function App() {
       if (res.ok) {
         await show(
           'ok',
-          debug
-            ? `${res.resolvedName} · ${res.kind} → ${res.price}`
-            : `已更新「${res.resolvedName}」${res.kind}价为 ${res.price}`,
-          debug ? res.updated ?? [] : [],
+          `已更新「${res.resolvedName}」${res.kind}价为 ${res.price}`,
+          res.updated ?? [],
         )
         setName('')
         nameRef.current?.focus()
@@ -203,6 +212,10 @@ function App() {
   const pickBatchFile = async () => {
     const path = await Dialogs.OpenFile({ Title: '选择其他价格表', Filters: xlsxFilter })
     if (!path || typeof path !== 'string') return
+    await loadBatch(path)
+  }
+
+  const loadBatch = async (path: string) => {
     try {
       setBusy(true)
       const res = (await PriceService.PreviewPriceSheet(path, batchKind)) as BatchPreviewResult
@@ -233,6 +246,38 @@ function App() {
     await show('info', '已清除文件列表')
   }
 
+  const handlersRef = useRef({
+    busy: false,
+    loadBase,
+    loadMapping,
+    loadBatch,
+  })
+  handlersRef.current = { busy, loadBase, loadMapping, loadBatch }
+
+  useEffect(() => {
+    const off = Events.On('files-dropped', (ev) => {
+      const data = (ev?.data ?? {}) as {
+        path?: string
+        role?: string
+        error?: string
+      }
+      const h = handlersRef.current
+      if (h.busy) return
+      if (data.error) {
+        void show('err', data.error)
+        return
+      }
+      const path = data.path
+      if (!path) return
+      const role = (data.role || '').replace(/^tour-/, '')
+      if (role === 'base') void h.loadBase(path)
+      else if (role === 'mapping') void h.loadMapping(path)
+      else if (role === 'batch') void h.loadBatch(path)
+      else void show('err', '请拖到基础表、名称映射或批量更新卡片上')
+    })
+    return () => off()
+  }, [])
+
   const applyBatch = async () => {
     if (!previewItems.length) return
     try {
@@ -245,7 +290,13 @@ function App() {
       setResultRows(res.rows ?? [])
       setResultTitle(`${res.fileName || '批量更新'}（${res.kind}） ${res.message}`)
       setResultOpen(true)
-      await show(res.ok ? 'ok' : 'err', `批量${res.kind}：${res.message}`)
+      const details = (res.rows ?? [])
+        .filter((r) => r.status === 'updated')
+        .map(
+          (r) =>
+            `${r.resolvedName || r.name}：${r.oldPrice || '-'} → ${r.newPrice}`,
+        )
+      await show(res.ok ? 'ok' : 'err', `批量${res.kind}：${res.message}`, details)
     } catch (e) {
       await show('err', String(e))
     } finally {
@@ -256,11 +307,17 @@ function App() {
   const undoOne = async (index: number) => {
     try {
       setBusy(true)
+      const before = resultRows.find((r) => r.index === index)
       const res = (await PriceService.UndoBatchRow(index)) as BatchApplyResult
       setStatus(await PriceService.Status())
       setResultRows(res.rows ?? [])
       setResultTitle(`${res.fileName || '批量更新'}（${res.kind}） ${res.message}`)
-      await show('ok', res.message)
+      const detail = before
+        ? [
+            `${before.resolvedName || before.name}：${before.newPrice} → ${before.oldPrice || '-'}（撤回）`,
+          ]
+        : []
+      await show('ok', res.message, detail)
     } catch (e) {
       await show('err', String(e))
     } finally {
@@ -271,11 +328,15 @@ function App() {
   const undoAll = async () => {
     try {
       setBusy(true)
+      const before = resultRows.filter((r) => r.canUndo && r.status === 'updated')
       const res = (await PriceService.UndoBatchAll()) as BatchApplyResult
       setStatus(await PriceService.Status())
       setResultRows(res.rows ?? [])
       setResultTitle(`${res.fileName || '批量更新'}（${res.kind}） ${res.message}`)
-      await show('ok', res.message)
+      const details = before.map(
+        (r) => `${r.resolvedName || r.name}：${r.newPrice} → ${r.oldPrice || '-'}（撤回）`,
+      )
+      await show('ok', res.message, details)
     } catch (e) {
       await show('err', String(e))
     } finally {
@@ -311,6 +372,28 @@ function App() {
     }
   }
 
+  const exportLogs = async () => {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    const path = await Dialogs.SaveFile({
+      Title: '导出操作日志',
+      Filename: `PriceMerge-日志-${stamp}.txt`,
+      Filters: [
+        { DisplayName: '文本日志', Pattern: '*.txt' },
+        { DisplayName: 'Log', Pattern: '*.log' },
+      ],
+    })
+    if (!path) return
+    try {
+      setBusy(true)
+      const saved = await PriceService.ExportLogs(path)
+      await show('ok', `日志已保存 ${fileNameOnly(saved)}`)
+    } catch (e) {
+      await show('err', String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const lines = logInfo.lines ?? []
   const matchedCount = previewItems.filter((i) => i.matched).length
   const undoableCount = resultRows.filter((r) => r.canUndo && r.status === 'updated').length
@@ -332,25 +415,43 @@ function App() {
               <button type="button" className="version" onClick={onVersionClick}>
                 v{APP_VERSION}
               </button>
-              {debug ? <span className="debug-badge">调试</span> : null}
             </div>
             <p>出 / 接价格合并</p>
           </div>
         </div>
-        <button className="btn export" disabled={busy || !status.loaded} onClick={doExport}>
-          导出 Excel
-        </button>
+        <div className="header-actions">
+          <button type="button" className="btn ghost" onClick={() => startTour({ markSeen: true })}>
+            教程
+          </button>
+          <button
+            id="tour-export"
+            className="btn export"
+            disabled={busy || !status.loaded}
+            onClick={doExport}
+          >
+            导出 Excel
+          </button>
+        </div>
       </header>
 
       <div className="workspace">
         <section className="panel left">
           <div className="row-2">
-            <article className="tile">
+            <article
+              className="tile drop-tile"
+              id="tour-base"
+              data-file-drop-target
+              data-drop-role="base"
+            >
               <div className="tile-body">
                 <span className="label">基础表</span>
                 <strong className="ellipsis">{status.loaded ? status.baseName : '未加载'}</strong>
                 <span className="hint">
-                  {status.loaded ? (status.dirty ? '有未导出更改' : '已就绪') : '请选择 Excel 基础表'}
+                  {status.loaded
+                    ? status.dirty
+                      ? '有未导出更改'
+                      : '已就绪 · 可拖入更换'
+                    : '点击选择或拖入 Excel'}
                   {debug && status.loaded ? ` · ${status.blockCount} 区块` : ''}
                 </span>
               </div>
@@ -359,7 +460,12 @@ function App() {
               </button>
             </article>
 
-            <article className="tile">
+            <article
+              className="tile drop-tile"
+              id="tour-mapping"
+              data-file-drop-target
+              data-drop-role="mapping"
+            >
               <div className="tile-body">
                 <span className="label">
                   名称映射
@@ -383,7 +489,7 @@ function App() {
                   </span>
                 </span>
                 <strong>{status.mappingCount > 0 ? `${status.mappingCount} 条` : '未使用'}</strong>
-                <span className="hint">两列：其他名 | 基础名</span>
+                <span className="hint">两列：其他名 | 基础名 · 可拖入</span>
               </div>
               <div className="tile-actions">
                 {status.mappingCount > 0 ? (
@@ -398,7 +504,7 @@ function App() {
             </article>
           </div>
 
-          <article className="tile form-tile">
+          <article className="tile form-tile" id="tour-single">
             <div className="tile-title">
               <span className="label">单条更新</span>
             </div>
@@ -435,10 +541,15 @@ function App() {
             </div>
           </article>
 
-          <article className="tile form-tile">
+          <article
+            className="tile form-tile drop-tile"
+            id="tour-batch"
+            data-file-drop-target
+            data-drop-role="batch"
+          >
             <div className="tile-title">
               <span className="label">批量更新</span>
-              <span className="hint">先上传价格表，查看确认后再更新</span>
+              <span className="hint">上传或拖入价格表，查看确认后再更新</span>
             </div>
             <div className="form-row batch-row">
               <div className="field">
@@ -487,7 +598,7 @@ function App() {
           </div>
         </section>
 
-        <section className="panel log">
+        <section className="panel log" id="tour-log">
           <div className="log-top">
             <div className="tile-body">
               <span className="label">操作日志</span>
@@ -498,9 +609,14 @@ function App() {
                 </span>
               ) : null}
             </div>
-            <button className="btn ghost" disabled={busy || logInfo.count === 0} onClick={clearLogs}>
-              清空
-            </button>
+            <div className="tile-actions">
+              <button className="btn ghost" disabled={busy || logInfo.count === 0} onClick={exportLogs}>
+                导出
+              </button>
+              <button className="btn ghost" disabled={busy || logInfo.count === 0} onClick={clearLogs}>
+                清空
+              </button>
+            </div>
           </div>
           <div className="log-list">
             {lines.length === 0 ? (
@@ -511,6 +627,20 @@ function App() {
                   <div className="log-meta">
                     <span className="log-time">{entry.time.slice(11) || '--:--:--'}</span>
                     <span className={`tag ${entry.level}`}>{levelLabel(entry.level, debug)}</span>
+                    {entry.details?.length ? (
+                      <button
+                        type="button"
+                        className="btn-text log-view"
+                        onClick={() =>
+                          setLogDetail({
+                            title: friendlyMessage(entry.message, debug),
+                            lines: entry.details ?? [],
+                          })
+                        }
+                      >
+                        查看
+                      </button>
+                    ) : null}
                   </div>
                   <p>{friendlyMessage(entry.message, debug)}</p>
                 </div>
@@ -520,109 +650,120 @@ function App() {
         </section>
       </div>
 
-      {previewOpen ? (
-        <div className="modal-backdrop" onClick={() => setPreviewOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-            <div className="modal-head">
-              <div>
-                <span className="label">价格预览</span>
-                <strong>
-                  {previewFile}（{previewKind}）· {previewItems.length} 条 / 可匹配 {matchedCount}
-                </strong>
-              </div>
-              <button className="btn ghost" onClick={() => setPreviewOpen(false)}>
-                关闭
-              </button>
-            </div>
-            <div className="modal-body">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>名称</th>
-                    <th>原价</th>
-                    <th>新价</th>
-                    <th>状态</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {previewItems.map((item) => (
-                    <tr key={`${item.name}-${item.newPrice}`} className={item.matched ? '' : 'miss'}>
-                      <td>
-                        {item.resolvedName !== item.name
-                          ? `${item.name}→${item.resolvedName}`
-                          : item.name}
-                      </td>
-                      <td>{item.matched ? item.oldPrice || '-' : '-'}</td>
-                      <td>{item.newPrice}</td>
-                      <td>{item.matched ? '可更新' : '未匹配'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)}>
+        <div className="modal-head">
+          <div>
+            <span className="label">价格预览</span>
+            <strong>
+              {previewFile}（{previewKind}）· {previewItems.length} 条 / 可匹配 {matchedCount}
+            </strong>
           </div>
+          <button className="btn ghost" onClick={() => setPreviewOpen(false)}>
+            关闭
+          </button>
         </div>
-      ) : null}
+        <div className="modal-body">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>原价</th>
+                <th>新价</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {previewItems.map((item) => (
+                <tr key={`${item.name}-${item.newPrice}`} className={item.matched ? '' : 'miss'}>
+                  <td>
+                    {item.resolvedName !== item.name
+                      ? `${item.name}→${item.resolvedName}`
+                      : item.name}
+                  </td>
+                  <td>{item.matched ? item.oldPrice || '-' : '-'}</td>
+                  <td>{item.newPrice}</td>
+                  <td>{item.matched ? '可更新' : '未匹配'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Modal>
 
-      {resultOpen ? (
-        <div className="modal-backdrop" onClick={() => setResultOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-            <div className="modal-head">
-              <div>
-                <span className="label">更新结果</span>
-                <strong>{resultTitle}</strong>
-              </div>
-              <div className="tile-actions">
-                <button className="btn ghost" disabled={busy || undoableCount === 0} onClick={undoAll}>
-                  全部撤回
-                </button>
-                <button className="btn ghost" onClick={() => setResultOpen(false)}>
-                  关闭
-                </button>
-              </div>
-            </div>
-            <div className="modal-body">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>名称</th>
-                    <th>老价格</th>
-                    <th>新价格</th>
-                    <th>结果</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {resultRows.map((row) => (
-                    <tr
-                      key={`${row.index}-${row.name}`}
-                      className={row.status === 'updated' ? '' : 'miss'}
-                    >
-                      <td>{row.resolvedName || row.name}</td>
-                      <td>{row.oldPrice || '-'}</td>
-                      <td>{row.newPrice}</td>
-                      <td>{statusText(row.status)}</td>
-                      <td>
-                        {row.canUndo && row.status === 'updated' ? (
-                          <button
-                            className="btn-text"
-                            disabled={busy}
-                            onClick={() => undoOne(row.index)}
-                          >
-                            撤回
-                          </button>
-                        ) : (
-                          <span className="hint">-</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+      <Modal open={resultOpen} onClose={() => setResultOpen(false)}>
+        <div className="modal-head">
+          <div>
+            <span className="label">更新结果</span>
+            <strong>{resultTitle}</strong>
+          </div>
+          <div className="tile-actions">
+            <button className="btn ghost" disabled={busy || undoableCount === 0} onClick={undoAll}>
+              全部撤回
+            </button>
+            <button className="btn ghost" onClick={() => setResultOpen(false)}>
+              关闭
+            </button>
           </div>
         </div>
-      ) : null}
+        <div className="modal-body">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>老价格</th>
+                <th>新价格</th>
+                <th>结果</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {resultRows.map((row) => (
+                <tr
+                  key={`${row.index}-${row.name}`}
+                  className={row.status === 'updated' ? '' : 'miss'}
+                >
+                  <td>{row.resolvedName || row.name}</td>
+                  <td>{row.oldPrice || '-'}</td>
+                  <td>{row.newPrice}</td>
+                  <td>{statusText(row.status)}</td>
+                  <td>
+                    {row.canUndo && row.status === 'updated' ? (
+                      <button
+                        className="btn-text"
+                        disabled={busy}
+                        onClick={() => undoOne(row.index)}
+                      >
+                        撤回
+                      </button>
+                    ) : (
+                      <span className="hint">-</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Modal>
+
+      <Modal open={!!logDetail} onClose={() => setLogDetail(null)}>
+        <div className="modal-head">
+          <div>
+            <span className="label">更新明细</span>
+            <strong>{logDetail?.title}</strong>
+          </div>
+          <button className="btn ghost" onClick={() => setLogDetail(null)}>
+            关闭
+          </button>
+        </div>
+        <div className="modal-body">
+          <ul className="log-detail-list">
+            {(logDetail?.lines ?? []).map((line, i) => (
+              <li key={`${line}-${i}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      </Modal>
     </main>
   )
 }
