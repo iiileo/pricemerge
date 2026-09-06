@@ -56,7 +56,7 @@ jobs:
             os: macos-14
             goos: darwin
             goarch: arm64
-            artifact: PriceMerge-${{ needs.version.outputs.version }}-darwin-arm64.zip
+            artifact: PriceMerge-${{ needs.version.outputs.version }}-darwin-arm64.dmg
           - name: Windows amd64
             os: windows-latest
             goos: windows
@@ -96,14 +96,15 @@ jobs:
           python3 scripts/set-version.py "${{ needs.version.outputs.version }}"
           echo "VERSION=${{ needs.version.outputs.version }}" >> "$GITHUB_ENV"
 
-      - name: Build macOS arm64 package
+      - name: Build macOS arm64 DMG
         if: matrix.goos == 'darwin'
         shell: bash
         run: |
           set -euo pipefail
-          wails3 package GOOS=darwin GOARCH=arm64
-          test -d "bin/PriceMerge.app"
-          ditto -c -k --keepParent "bin/PriceMerge.app" "bin/${{ matrix.artifact }}"
+          # Drag-to-Applications style installer
+          wails3 task darwin:package:dmg ARCH=arm64
+          test -f "bin/PriceMerge.dmg"
+          mv "bin/PriceMerge.dmg" "bin/${{ matrix.artifact }}"
           ls -lh "bin/${{ matrix.artifact }}"
 
       - name: Build Windows amd64
@@ -151,7 +152,7 @@ jobs:
           draft: false
           prerelease: ${{ contains(needs.version.outputs.version, '-') }}
           files: |
-            dist/PriceMerge-${{ needs.version.outputs.version }}-darwin-arm64.zip
+            dist/PriceMerge-${{ needs.version.outputs.version }}-darwin-arm64.dmg
             dist/PriceMerge-${{ needs.version.outputs.version }}-windows-amd64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

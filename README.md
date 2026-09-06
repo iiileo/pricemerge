@@ -71,14 +71,15 @@ wails3 dev
 # 当前平台编译
 wails3 build
 
-# 打包（macOS → .app，Windows → 安装包流程）
-wails3 package
+# 打包
+wails3 package                         # → bin/PriceMerge.app
+wails3 task darwin:package:dmg         # → bin/PriceMerge.dmg（可拖到「应用程序」安装）
 
 # 测试
 go test ./...
 ```
 
-产物在 `bin/`。
+产物在 `bin/`。macOS 发布推荐使用 **DMG**：打开后把 `PriceMerge` 拖到 `Applications` 即可。
 
 ### 版本号
 
@@ -99,7 +100,7 @@ GitHub Actions：`.github/workflows/build-release.yml`
 
 产物：
 
-- `PriceMerge-{version}-darwin-arm64.zip`
+- `PriceMerge-{version}-darwin-arm64.dmg`（拖到「应用程序」安装）
 - `PriceMerge-{version}-windows-amd64.exe`
 
 并自动创建 GitHub Release。
