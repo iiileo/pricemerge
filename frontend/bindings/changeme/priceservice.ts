@@ -99,6 +99,13 @@ export function PreviewPriceSheet(path: string, kind: string): $CancellablePromi
 }
 
 /**
+ * RemovePendingBatchItem removes one preview row by index; it will not be applied.
+ */
+export function RemovePendingBatchItem(index: number): $CancellablePromise<$models.BatchPreviewResult> {
+    return $Call.ByID(246396782, index);
+}
+
+/**
  * Status returns current load state.
  */
 export function Status(): $CancellablePromise<$models.StatusInfo> {

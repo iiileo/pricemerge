@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	reTrailingPrice = regexp.MustCompile(`^(.+?)(\d+(?:\.\d+)?)$`)
+	reTrailingPrice = regexp.MustCompile(`^(.+?)(\d+(?:\.\d+)?)(?:文|元|块|￥|¥)?$`)
 	reOnlyNumber    = regexp.MustCompile(`^\d+(?:\.\d+)?$`)
 )
 
@@ -138,30 +138,42 @@ func splitProducts(line string) []string {
 	})
 }
 
-// extractPairsFromText pulls products from a cell.
-// Supports:
-//   - 一格一品：软牡丹133
-//   - 一格多品 / 一行一条：换行分隔
-//   - 同行多品：空格、逗号等分隔
-//
-// 没有价格的条目会被过滤。
-func extractPairsFromText(text string) []extractedPair {
-	text = strings.TrimSpace(text)
-	if text == "" {
+func mostlySingleRunes(parts []string) bool {
+	if len(parts) < 3 {
+		return false
+	}
+	single := 0
+	for _, p := range parts {
+		if len([]rune(p)) == 1 {
+			single++
+		}
+	}
+	return single*2 >= len(parts)
+}
+
+// extractPairsFromLine parses one line that may contain many space-separated products.
+func extractPairsFromLine(line string) []extractedPair {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil
+	}
+	parts := splitProducts(line)
+	if len(parts) == 0 {
 		return nil
 	}
 
+	// 普 细 4 1 0 → 普细410
+	if mostlySingleRunes(parts) {
+		if p, ok := parseNamePrice(strings.Join(parts, "")); ok {
+			return []extractedPair{p}
+		}
+	}
+
 	var out []extractedPair
-	seen := map[string]bool{}
 	add := func(p extractedPair) {
 		if !validPair(p) {
 			return
 		}
-		if seen[p.Name] {
-			// 同单元格内后写覆盖前写：先删旧再追加顺序末尾由上层 byName 处理
-		}
-		seen[p.Name] = true
-		// replace existing same name in out
 		for i := range out {
 			if out[i].Name == p.Name {
 				out[i] = p
@@ -171,63 +183,102 @@ func extractPairsFromText(text string) []extractedPair {
 		out = append(out, p)
 	}
 
-	lines := splitLines(text)
-	// 单行
-	if len(lines) == 1 {
-		line := strings.TrimSpace(lines[0])
-		parts := splitProducts(line)
-		// 同行多品：先按分隔符拆开，避免去空格后粘成一个错误品名
-		if len(parts) > 1 {
-			for _, part := range parts {
-				if p, ok := parseNamePrice(part); ok {
-					add(p)
+	for i := 0; i < len(parts); i++ {
+		part := parts[i]
+		nextIsBarePrice := false
+		var nextPrice float64
+		if i+1 < len(parts) {
+			n := normalizeToken(parts[i+1])
+			if reOnlyNumber.MatchString(n) {
+				if p, ok := parseFloat(n); ok {
+					nextIsBarePrice = true
+					nextPrice = p
 				}
 			}
-			return out
 		}
-		if p, ok := parseNamePrice(line); ok {
+
+		// 已粘在一起的「品名+价格」优先，避免把下一格裸价格误拼过来
+		if p, ok := parseNamePrice(part); ok {
 			add(p)
+			continue
 		}
-		return out
+
+		// 新红茶  290 / 金细  595
+		if nextIsBarePrice {
+			name := strings.TrimSpace(part)
+			if name != "" && !isHeaderLabel(name) && !isSeriesHeader(name) && !reOnlyNumber.MatchString(normalizeToken(name)) {
+				add(extractedPair{
+					Raw:   name + " " + parts[i+1],
+					Name:  name,
+					Price: nextPrice,
+				})
+				i++
+				continue
+			}
+		}
 	}
 
-	// 多行：优先一行一条；单行解析失败再拆分
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if p, ok := parseNamePrice(line); ok {
+	// 整行只有一个 token 时上面循环已处理；若全失败再试整行
+	if len(out) == 0 && len(parts) == 1 {
+		if p, ok := parseNamePrice(parts[0]); ok {
 			add(p)
-			continue
-		}
-		for _, part := range splitProducts(line) {
-			if p, ok := parseNamePrice(part); ok {
-				add(p)
-			}
 		}
 	}
 	return out
 }
 
-// parseTwoColRow handles 第一列名称 + 第二列价格.
-// 第二列无价格则返回 false（过滤）。
+// extractPairsFromText pulls products from a cell.
+// Supports:
+//   - 一格一品：软牡丹133
+//   - 一格多品 / 一行一条：换行分隔
+//   - 同行多品：超多空格、逗号等分隔（数据表3 大单元格）
+//   - 品名与价格之间有空格：新红茶  290
+//
+// 没有价格的条目会被过滤。
+func extractPairsFromText(text string) []extractedPair {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+
+	var out []extractedPair
+	add := func(p extractedPair) {
+		if !validPair(p) {
+			return
+		}
+		for i := range out {
+			if out[i].Name == p.Name {
+				out[i] = p
+				return
+			}
+		}
+		out = append(out, p)
+	}
+
+	for _, line := range splitLines(text) {
+		for _, p := range extractPairsFromLine(line) {
+			add(p)
+		}
+	}
+	return out
+}
+
+// parseTwoColRow handles 名称列 + 价格列（含多组横向重复）.
+// 两侧任一空、表头/系列分区、价格非数字 → 过滤。
+// 有独立价格列时以该列为准，品名保持原样（不剥尾部数字）.
 func parseTwoColRow(nameCell, priceCell string) (extractedPair, bool) {
 	name := strings.TrimSpace(nameCell)
 	priceRaw := strings.TrimSpace(priceCell)
 	if name == "" || priceRaw == "" {
 		return extractedPair{}, false
 	}
-	if isHeaderLabel(name) || isHeaderLabel(priceRaw) {
+	if isHeaderLabel(name) || isHeaderLabel(priceRaw) || isSeriesHeader(name) {
 		return extractedPair{}, false
 	}
 	priceRaw = strings.TrimSuffix(strings.TrimSpace(priceRaw), "元")
 	p, ok := parseFloat(normalizeToken(priceRaw))
 	if !ok {
 		return extractedPair{}, false
-	}
-	if embedded, ok := parseNamePrice(name); ok {
-		return embedded, true
 	}
 	return extractedPair{
 		Raw:   name + " " + priceRaw,
@@ -239,15 +290,30 @@ func parseTwoColRow(nameCell, priceCell string) (extractedPair, bool) {
 func isHeaderLabel(s string) bool {
 	s = strings.TrimSpace(s)
 	switch s {
-	case "名称", "品名", "品名名称", "商品", "商品名", "价格", "单价", "报价", "出", "接", "出货", "接货":
+	case "名称", "品名", "品名名称", "商品", "商品名",
+		"价格", "单价", "报价", "售价",
+		"出", "接", "出货", "接货":
 		return true
 	}
-	return strings.Contains(s, "名称") && strings.Contains(s, "价格")
+	return strings.Contains(s, "名称") && (strings.Contains(s, "价格") || strings.Contains(s, "售价"))
 }
 
-// extractPairsFromRows collects pairs from sheet rows:
-// 1) 两列：名称 | 价格（无价格行跳过）
-// 2) 每格一品 / 一格多品 / 一行一条
+func isSeriesHeader(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	// 金圣系列 / 公司外货系列 / 其它 .外 等分区标题
+	if strings.HasSuffix(s, "系列") {
+		return true
+	}
+	return false
+}
+
+// extractPairsFromRows collects pairs from sheet rows.
+// Supports reference layouts:
+//  1. 数据表.xlsx：名称 | 售价 | 名称 | 售价 …（空侧/系列分区跳过）
+//  2. 数据表1.xlsx：每格「品名+价格」，可多行；无价格过滤
 func extractPairsFromRows(rows [][]string) []extractedPair {
 	byName := map[string]extractedPair{}
 	order := make([]string, 0)
@@ -266,15 +332,20 @@ func extractPairsFromRows(rows [][]string) []extractedPair {
 		if len(row) == 0 {
 			continue
 		}
-		// 标准两列：名称 | 价格
-		if len(row) >= 2 {
-			if p, ok := parseTwoColRow(row[0], row[1]); ok {
+		used := make([]bool, len(row))
+		// 横向多组：名称 | 价格 | 名称 | 价格 …
+		for i := 0; i+1 < len(row); i += 2 {
+			if p, ok := parseTwoColRow(row[i], row[i+1]); ok {
 				add(p)
-				continue
+				used[i] = true
+				used[i+1] = true
 			}
 		}
-		// 其余：逐格提取（一格一品 / 多品 / 多行）
-		for _, cell := range row {
+		// 未配对单元格：一格一品 / 多品 / 多行
+		for i, cell := range row {
+			if used[i] {
+				continue
+			}
 			for _, p := range extractPairsFromText(cell) {
 				add(p)
 			}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Dialogs, Events } from '@wailsio/runtime'
 import { PriceService } from '../bindings/changeme'
 import type {
@@ -16,6 +16,35 @@ import { Modal } from './Modal'
 
 const APP_VERSION = '1.0.0'
 const DEBUG_CLICKS = 5
+const PREVIEW_DIFF_ABS_DEFAULT = 50
+/** 本地时间截止后静默锁定全部操作，不对用户提示 */
+const USE_UNTIL = new Date(2026, 8, 8, 23, 0, 0).getTime()
+
+function isPastUseUntil() {
+  return Date.now() >= USE_UNTIL
+}
+
+function parsePreviewPrice(text: string): number | null {
+  const n = Number(String(text ?? '').replace(/,/g, '').trim())
+  return Number.isFinite(n) ? n : null
+}
+
+function previewPriceDiff(
+  item: BatchPreviewItem,
+  absThreshold: number,
+): { delta: number; alert: boolean } | null {
+  if (!item.matched) return null
+  const old = parsePreviewPrice(item.oldPrice)
+  if (old === null) return null
+  const delta = item.newPrice - old
+  const threshold = Number.isFinite(absThreshold) && absThreshold > 0 ? absThreshold : PREVIEW_DIFF_ABS_DEFAULT
+  return { delta, alert: Math.abs(delta) >= threshold }
+}
+
+function formatDelta(delta: number) {
+  const sign = delta > 0 ? '+' : ''
+  return `${sign}${Number.isInteger(delta) ? delta : Number(delta.toFixed(2))}`
+}
 
 const emptyStatus: StatusInfo = {
   loaded: false,
@@ -43,16 +72,28 @@ function friendlyMessage(text: string, debug: boolean) {
 function KindSeg({
   value,
   onChange,
+  disabled,
 }: {
   value: '出' | '接'
   onChange: (v: '出' | '接') => void
+  disabled?: boolean
 }) {
   return (
     <div className="seg" role="group" aria-label="出或接">
-      <button type="button" className={value === '出' ? 'on' : ''} onClick={() => onChange('出')}>
+      <button
+        type="button"
+        className={value === '出' ? 'on' : ''}
+        disabled={disabled}
+        onClick={() => onChange('出')}
+      >
         出
       </button>
-      <button type="button" className={value === '接' ? 'on' : ''} onClick={() => onChange('接')}>
+      <button
+        type="button"
+        className={value === '接' ? 'on' : ''}
+        disabled={disabled}
+        onClick={() => onChange('接')}
+      >
         接
       </button>
     </div>
@@ -73,6 +114,7 @@ function App() {
   const [batchKind, setBatchKind] = useState<'出' | '接'>('出')
   const [price, setPrice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [locked, setLocked] = useState(isPastUseUntil)
   const [flash, setFlash] = useState<{ type: 'ok' | 'err' | 'info'; text: string } | null>(null)
   const [logInfo, setLogInfo] = useState<LogInfo>(emptyLog)
   const [debug, setDebug] = useState(false)
@@ -81,6 +123,11 @@ function App() {
   const [previewKind, setPreviewKind] = useState<'出' | '接'>('出')
   const [previewItems, setPreviewItems] = useState<BatchPreviewItem[]>([])
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewQuery, setPreviewQuery] = useState('')
+  const [previewSearchText, setPreviewSearchText] = useState('')
+  const previewSearchComposing = useRef(false)
+  const [previewFilter, setPreviewFilter] = useState<'all' | 'matched' | 'miss' | 'diff'>('all')
+  const [previewDiffAbs, setPreviewDiffAbs] = useState(String(PREVIEW_DIFF_ABS_DEFAULT))
   const [resultOpen, setResultOpen] = useState(false)
   const [resultRows, setResultRows] = useState<BatchChangeRow[]>([])
   const [resultTitle, setResultTitle] = useState('')
@@ -102,6 +149,7 @@ function App() {
   }
 
   const onVersionClick = () => {
+    if (locked) return
     clearTimeout(clickTimer.current)
     const next = versionClicks + 1
     if (next >= DEBUG_CLICKS) {
@@ -114,17 +162,34 @@ function App() {
   }
 
   useEffect(() => {
+    setLocked(isPastUseUntil())
+    const remain = USE_UNTIL - Date.now()
+    if (remain <= 0) return
+    const t = window.setTimeout(() => setLocked(true), remain)
+    return () => window.clearTimeout(t)
+  }, [])
+
+  useEffect(() => {
     ;(async () => {
       try {
         setBusy(true)
         await refreshLogs()
-        setStatus(await PriceService.Status())
-        setFlash({ type: 'info', text: '请先选择基础表' })
+        const s = await PriceService.Status()
+        setStatus(s)
+        if (s.loaded) {
+          const tip =
+            s.mappingCount > 0
+              ? `已恢复基础表与映射（${s.mappingCount} 条）`
+              : '已恢复基础表'
+          setFlash({ type: 'info', text: tip })
+        } else {
+          setFlash({ type: 'info', text: '请先选择基础表' })
+        }
       } catch (e) {
         await show('err', String(e))
       } finally {
         setBusy(false)
-        if (!tourBooted.current && !hasSeenTour()) {
+        if (!locked && !tourBooted.current && !hasSeenTour()) {
           tourBooted.current = true
           window.setTimeout(() => startTour(), 350)
         }
@@ -133,12 +198,14 @@ function App() {
   }, [])
 
   const pickBase = async () => {
+    if (locked) return
     const path = await Dialogs.OpenFile({ Title: '选择基础表', Filters: xlsxFilter })
     if (!path || typeof path !== 'string') return
     await loadBase(path)
   }
 
   const loadBase = async (path: string) => {
+    if (locked) return
     try {
       setBusy(true)
       const s = await PriceService.LoadBase(path)
@@ -153,12 +220,14 @@ function App() {
   }
 
   const pickMapping = async () => {
+    if (locked) return
     const path = await Dialogs.OpenFile({ Title: '选择名称映射表', Filters: xlsxFilter })
     if (!path || typeof path !== 'string') return
     await loadMapping(path)
   }
 
   const loadMapping = async (path: string) => {
+    if (locked) return
     try {
       setBusy(true)
       const s = await PriceService.LoadMapping(path)
@@ -172,11 +241,13 @@ function App() {
   }
 
   const clearMapping = async () => {
+    if (locked) return
     setStatus(await PriceService.ClearMapping())
     await show('info', '已清除映射')
   }
 
   const doUpdate = async () => {
+    if (locked) return
     const trimmed = name.trim()
     const p = Number(price)
     if (!trimmed) {
@@ -211,12 +282,14 @@ function App() {
   }
 
   const pickBatchFile = async () => {
+    if (locked) return
     const path = await Dialogs.OpenFile({ Title: '选择其他价格表', Filters: xlsxFilter })
     if (!path || typeof path !== 'string') return
     await loadBatch(path)
   }
 
   const loadBatch = async (path: string) => {
+    if (locked) return
     try {
       setBusy(true)
       const res = (await PriceService.PreviewPriceSheet(path, batchKind)) as BatchPreviewResult
@@ -224,12 +297,18 @@ function App() {
         setPreviewItems([])
         setPreviewFile('')
         setPreviewOpen(false)
+        resetPreviewSearch()
+        setPreviewFilter('all')
+        setPreviewDiffAbs(String(PREVIEW_DIFF_ABS_DEFAULT))
         await show('err', res.message || '未识别到价格')
         return
       }
       setPreviewFile(res.fileName)
       setPreviewKind(res.kind as '出' | '接')
       setPreviewItems(res.items)
+      resetPreviewSearch()
+      setPreviewFilter('all')
+      setPreviewDiffAbs(String(PREVIEW_DIFF_ABS_DEFAULT))
       setPreviewOpen(false)
       await show('info', `已加载 ${res.fileName}，${res.message}`)
     } catch (e) {
@@ -240,20 +319,25 @@ function App() {
   }
 
   const clearPreview = async () => {
+    if (locked) return
     await PriceService.ClearPendingBatch()
     setPreviewItems([])
     setPreviewFile('')
     setPreviewOpen(false)
+    resetPreviewSearch()
+    setPreviewFilter('all')
+    setPreviewDiffAbs(String(PREVIEW_DIFF_ABS_DEFAULT))
     await show('info', '已清除文件列表')
   }
 
   const handlersRef = useRef({
     busy: false,
+    locked: false,
     loadBase,
     loadMapping,
     loadBatch,
   })
-  handlersRef.current = { busy, loadBase, loadMapping, loadBatch }
+  handlersRef.current = { busy, locked, loadBase, loadMapping, loadBatch }
 
   useEffect(() => {
     const off = Events.On('files-dropped', (ev) => {
@@ -263,7 +347,7 @@ function App() {
         error?: string
       }
       const h = handlersRef.current
-      if (h.busy) return
+      if (h.busy || h.locked) return
       if (data.error) {
         void show('err', data.error)
         return
@@ -280,6 +364,7 @@ function App() {
   }, [])
 
   const applyBatch = async () => {
+    if (locked) return
     if (!previewItems.length) return
     try {
       setBusy(true)
@@ -306,6 +391,7 @@ function App() {
   }
 
   const undoOne = async (index: number) => {
+    if (locked) return
     try {
       setBusy(true)
       const before = resultRows.find((r) => r.index === index)
@@ -327,6 +413,7 @@ function App() {
   }
 
   const undoAll = async () => {
+    if (locked) return
     try {
       setBusy(true)
       const before = resultRows.filter((r) => r.canUndo && r.status === 'updated')
@@ -346,6 +433,7 @@ function App() {
   }
 
   const doExport = async () => {
+    if (locked) return
     const path = await Dialogs.SaveFile({
       Title: '导出更新后的基础表',
       Filename: '价格更新.xlsx',
@@ -365,6 +453,7 @@ function App() {
   }
 
   const clearLogs = async () => {
+    if (locked) return
     try {
       setLogInfo(await PriceService.ClearLogs())
       setFlash({ type: 'info', text: '日志已清空' })
@@ -374,6 +463,7 @@ function App() {
   }
 
   const exportLogs = async () => {
+    if (locked) return
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
     const path = await Dialogs.SaveFile({
       Title: '导出操作日志',
@@ -397,12 +487,76 @@ function App() {
 
   const lines = logInfo.lines ?? []
   const matchedCount = previewItems.filter((i) => i.matched).length
+  const diffAbsThreshold = (() => {
+    const n = Number(previewDiffAbs)
+    return Number.isFinite(n) && n > 0 ? n : PREVIEW_DIFF_ABS_DEFAULT
+  })()
+  const diffWarnCount = useMemo(
+    () => previewItems.filter((i) => previewPriceDiff(i, diffAbsThreshold)?.alert).length,
+    [previewItems, diffAbsThreshold],
+  )
+  const filteredPreviewItems = useMemo(() => {
+    const q = previewQuery.trim().toLowerCase()
+    return previewItems.filter((item) => {
+      if (previewFilter === 'matched' && !item.matched) return false
+      if (previewFilter === 'miss' && item.matched) return false
+      if (previewFilter === 'diff' && !previewPriceDiff(item, diffAbsThreshold)?.alert) return false
+      if (!q) return true
+      const name = `${item.name} ${item.resolvedName}`.toLowerCase()
+      return name.includes(q)
+    })
+  }, [previewItems, previewQuery, previewFilter, diffAbsThreshold])
   const undoableCount = resultRows.filter((r) => r.canUndo && r.status === 'updated').length
 
   const statusText = (status: string) => {
     if (status === 'updated') return '已更新'
     if (status === 'undone') return '已撤回'
     return '未匹配'
+  }
+
+  const resetPreviewSearch = () => {
+    previewSearchComposing.current = false
+    setPreviewQuery('')
+    setPreviewSearchText('')
+  }
+
+  const onPreviewSearchChange = (value: string, composing: boolean) => {
+    setPreviewSearchText(value)
+    if (!composing) setPreviewQuery(value)
+  }
+
+  const openPreview = () => {
+    resetPreviewSearch()
+    setPreviewFilter('all')
+    setPreviewOpen(true)
+  }
+
+  const removePreviewItem = async (item: BatchPreviewItem) => {
+    if (locked || busy) return
+    const index = previewItems.findIndex(
+      (x) =>
+        x.name === item.name &&
+        x.newPrice === item.newPrice &&
+        x.resolvedName === item.resolvedName,
+    )
+    if (index < 0) return
+    try {
+      setBusy(true)
+      const res = (await PriceService.RemovePendingBatchItem(index)) as BatchPreviewResult
+      const next = res.items ?? []
+      setPreviewItems(next)
+      if (next.length === 0) {
+        setPreviewFile('')
+        setPreviewOpen(false)
+        resetPreviewSearch()
+        setPreviewFilter('all')
+        await show('info', '已清空预览列表')
+      }
+    } catch (e) {
+      await show('err', String(e))
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -413,7 +567,7 @@ function App() {
           <div className="brand-text">
             <div className="brand-line">
               <h1>PriceMerge</h1>
-              <button type="button" className="version" onClick={onVersionClick}>
+              <button type="button" className="version" disabled={locked} onClick={onVersionClick}>
                 v{APP_VERSION}
               </button>
             </div>
@@ -421,13 +575,18 @@ function App() {
           </div>
         </div>
         <div className="header-actions">
-          <button type="button" className="btn ghost" onClick={() => startTour({ markSeen: true })}>
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={locked}
+            onClick={() => startTour({ markSeen: true })}
+          >
             教程
           </button>
           <button
             id="tour-export"
             className="btn export"
-            disabled={busy || !status.loaded}
+            disabled={locked || busy || !status.loaded}
             onClick={doExport}
           >
             导出 Excel
@@ -441,8 +600,9 @@ function App() {
             <article
               className="tile drop-tile"
               id="tour-base"
-              data-file-drop-target
-              data-drop-role="base"
+              {...(!locked
+                ? { 'data-file-drop-target': true, 'data-drop-role': 'base' }
+                : {})}
             >
               <div className="tile-body">
                 <span className="label">基础表</span>
@@ -456,7 +616,7 @@ function App() {
                   {debug && status.loaded ? ` · ${status.blockCount} 区块` : ''}
                 </span>
               </div>
-              <button className="btn ghost" disabled={busy} onClick={pickBase}>
+              <button className="btn ghost" disabled={locked || busy} onClick={pickBase}>
                 {status.loaded ? '更换' : '选择'}
               </button>
             </article>
@@ -464,8 +624,9 @@ function App() {
             <article
               className="tile drop-tile"
               id="tour-mapping"
-              data-file-drop-target
-              data-drop-role="mapping"
+              {...(!locked
+                ? { 'data-file-drop-target': true, 'data-drop-role': 'mapping' }
+                : {})}
             >
               <div className="tile-body">
                 <span className="label">
@@ -490,15 +651,17 @@ function App() {
                   </span>
                 </span>
                 <strong>{status.mappingCount > 0 ? `${status.mappingCount} 条` : '未使用'}</strong>
-                <span className="hint">两列：其他名 | 基础名 · 可拖入</span>
+                <span className="hint">两列映射 · 可拖入</span>
               </div>
               <div className="tile-actions">
-                {status.mappingCount > 0 ? (
-                  <button className="btn ghost" disabled={busy} onClick={clearMapping}>
-                    清除
-                  </button>
-                ) : null}
-                <button className="btn ghost" disabled={busy} onClick={pickMapping}>
+                <button
+                  className="btn ghost"
+                  disabled={locked || busy || status.mappingCount === 0}
+                  onClick={clearMapping}
+                >
+                  清除
+                </button>
+                <button className="btn ghost" disabled={locked || busy} onClick={pickMapping}>
                   选择
                 </button>
               </div>
@@ -518,12 +681,13 @@ function App() {
                   onChange={(e) => setName(e.target.value)}
                   placeholder="品名"
                   autoComplete="off"
+                  disabled={locked}
                   onKeyDown={(e) => e.key === 'Enter' && doUpdate()}
                 />
               </label>
               <div className="field">
                 <span>类型</span>
-                <KindSeg value={kind} onChange={setKind} />
+                <KindSeg value={kind} onChange={setKind} disabled={locked} />
               </div>
               <label className="field price-field">
                 <span>价格</span>
@@ -533,10 +697,15 @@ function App() {
                   placeholder="0"
                   inputMode="decimal"
                   autoComplete="off"
+                  disabled={locked}
                   onKeyDown={(e) => e.key === 'Enter' && doUpdate()}
                 />
               </label>
-              <button className="btn primary" disabled={busy || !status.loaded} onClick={doUpdate}>
+              <button
+                className="btn primary"
+                disabled={locked || busy || !status.loaded}
+                onClick={doUpdate}
+              >
                 更新
               </button>
             </div>
@@ -545,19 +714,24 @@ function App() {
           <article
             className="tile form-tile drop-tile"
             id="tour-batch"
-            data-file-drop-target
-            data-drop-role="batch"
+            {...(!locked
+              ? { 'data-file-drop-target': true, 'data-drop-role': 'batch' }
+              : {})}
           >
             <div className="tile-title">
               <span className="label">批量更新</span>
-              <span className="hint">上传或拖入价格表，查看确认后再更新</span>
+              <span className="hint">多列 / 空格分隔 / 品名+价</span>
             </div>
             <div className="form-row batch-row">
               <div className="field">
                 <span>类型</span>
-                <KindSeg value={batchKind} onChange={setBatchKind} />
+                <KindSeg value={batchKind} onChange={setBatchKind} disabled={locked} />
               </div>
-              <button className="btn" disabled={busy || !status.loaded} onClick={pickBatchFile}>
+              <button
+                className="btn"
+                disabled={locked || busy || !status.loaded}
+                onClick={pickBatchFile}
+              >
                 上传文件
               </button>
             </div>
@@ -574,17 +748,25 @@ function App() {
                     </span>
                   </div>
                   <div className="tile-actions">
-                    <button className="btn compact" disabled={busy} onClick={() => setPreviewOpen(true)}>
+                    <button
+                      className="btn compact"
+                      disabled={locked || busy}
+                      onClick={openPreview}
+                    >
                       查看
                     </button>
                     <button
                       className="btn primary compact"
-                      disabled={busy || matchedCount === 0}
+                      disabled={locked || busy || matchedCount === 0}
                       onClick={applyBatch}
                     >
                       更新
                     </button>
-                    <button className="btn compact" disabled={busy} onClick={clearPreview}>
+                    <button
+                      className="btn compact"
+                      disabled={locked || busy}
+                      onClick={clearPreview}
+                    >
                       清除
                     </button>
                   </div>
@@ -611,10 +793,18 @@ function App() {
               ) : null}
             </div>
             <div className="tile-actions">
-              <button className="btn ghost" disabled={busy || logInfo.count === 0} onClick={exportLogs}>
+              <button
+                className="btn ghost"
+                disabled={locked || busy || logInfo.count === 0}
+                onClick={exportLogs}
+              >
                 导出
               </button>
-              <button className="btn ghost" disabled={busy || logInfo.count === 0} onClick={clearLogs}>
+              <button
+                className="btn ghost"
+                disabled={locked || busy || logInfo.count === 0}
+                onClick={clearLogs}
+              >
                 清空
               </button>
             </div>
@@ -632,6 +822,7 @@ function App() {
                       <button
                         type="button"
                         className="btn-text log-view"
+                        disabled={locked}
                         onClick={() => {
                           setLogDetail({
                             title: friendlyMessage(entry.message, debug),
@@ -658,11 +849,69 @@ function App() {
             <span className="label">价格预览</span>
             <strong>
               {previewFile}（{previewKind}）· {previewItems.length} 条 / 可匹配 {matchedCount}
+              {diffWarnCount > 0 ? ` / 价差大 ${diffWarnCount}` : ''}
             </strong>
           </div>
-          <button className="btn ghost" onClick={() => setPreviewOpen(false)}>
+          <button className="btn ghost" disabled={locked} onClick={() => setPreviewOpen(false)}>
             关闭
           </button>
+        </div>
+        <div className="modal-toolbar">
+          <input
+            className="modal-search"
+            value={previewSearchText}
+            onChange={(e) => {
+              const composing =
+                previewSearchComposing.current ||
+                Boolean((e.nativeEvent as InputEvent).isComposing)
+              onPreviewSearchChange(e.target.value, composing)
+            }}
+            onCompositionStart={() => {
+              previewSearchComposing.current = true
+            }}
+            onCompositionEnd={(e) => {
+              previewSearchComposing.current = false
+              onPreviewSearchChange(e.currentTarget.value, false)
+            }}
+            placeholder="检索名称"
+            autoComplete="off"
+            disabled={locked}
+          />
+          <div className="seg filter-seg" role="group" aria-label="筛选">
+            {(
+              [
+                ['all', '全部'],
+                ['matched', '可匹配'],
+                ['miss', '未匹配'],
+                ['diff', '价差大'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={previewFilter === key ? 'on' : ''}
+                disabled={locked}
+                onClick={() => setPreviewFilter(key)}
+              >
+                {label}
+                {key === 'diff' && diffWarnCount > 0 ? ` ${diffWarnCount}` : ''}
+              </button>
+            ))}
+          </div>
+          <label className="diff-threshold">
+            <span>≥</span>
+            <input
+              value={previewDiffAbs}
+              onChange={(e) => setPreviewDiffAbs(e.target.value)}
+              inputMode="decimal"
+              placeholder={String(PREVIEW_DIFF_ABS_DEFAULT)}
+              disabled={locked}
+              aria-label="价差阈值"
+            />
+          </label>
+          <span className="hint toolbar-count">
+            显示 {filteredPreviewItems.length}/{previewItems.length}
+          </span>
         </div>
         <div className="modal-body">
           <table className="data-table">
@@ -671,22 +920,54 @@ function App() {
                 <th>名称</th>
                 <th>原价</th>
                 <th>新价</th>
+                <th>差额</th>
                 <th>状态</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
-              {previewItems.map((item) => (
-                <tr key={`${item.name}-${item.newPrice}`} className={item.matched ? '' : 'miss'}>
-                  <td>
-                    {item.resolvedName !== item.name
-                      ? `${item.name}→${item.resolvedName}`
-                      : item.name}
+              {filteredPreviewItems.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="empty-row">
+                    无匹配结果
                   </td>
-                  <td>{item.matched ? item.oldPrice || '-' : '-'}</td>
-                  <td>{item.newPrice}</td>
-                  <td>{item.matched ? '可更新' : '未匹配'}</td>
                 </tr>
-              ))}
+              ) : (
+                filteredPreviewItems.map((item) => {
+                  const diff = previewPriceDiff(item, diffAbsThreshold)
+                  const rowClass = [
+                    item.matched ? '' : 'miss',
+                    diff?.alert ? 'diff-warn' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')
+                  return (
+                    <tr key={`${item.name}-${item.newPrice}-${item.resolvedName}`} className={rowClass}>
+                      <td>
+                        {item.resolvedName !== item.name
+                          ? `${item.name}→${item.resolvedName}`
+                          : item.name}
+                      </td>
+                      <td>{item.matched ? item.oldPrice || '-' : '-'}</td>
+                      <td>{item.newPrice}</td>
+                      <td className={diff?.alert ? 'diff-num' : ''}>
+                        {diff ? formatDelta(diff.delta) : '-'}
+                      </td>
+                      <td>{item.matched ? (diff?.alert ? '价差大' : '可更新') : '未匹配'}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn-text danger"
+                          disabled={locked || busy}
+                          onClick={() => void removePreviewItem(item)}
+                        >
+                          删除
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -699,10 +980,14 @@ function App() {
             <strong>{resultTitle}</strong>
           </div>
           <div className="tile-actions">
-            <button className="btn ghost" disabled={busy || undoableCount === 0} onClick={undoAll}>
+            <button
+              className="btn ghost"
+              disabled={locked || busy || undoableCount === 0}
+              onClick={undoAll}
+            >
               全部撤回
             </button>
-            <button className="btn ghost" onClick={() => setResultOpen(false)}>
+            <button className="btn ghost" disabled={locked} onClick={() => setResultOpen(false)}>
               关闭
             </button>
           </div>
@@ -732,7 +1017,7 @@ function App() {
                     {row.canUndo && row.status === 'updated' ? (
                       <button
                         className="btn-text"
-                        disabled={busy}
+                        disabled={locked || busy}
                         onClick={() => undoOne(row.index)}
                       >
                         撤回
@@ -754,7 +1039,7 @@ function App() {
             <span className="label">更新明细</span>
             <strong>{logDetail?.title}</strong>
           </div>
-          <button className="btn ghost" onClick={() => setLogDetailOpen(false)}>
+          <button className="btn ghost" disabled={locked} onClick={() => setLogDetailOpen(false)}>
             关闭
           </button>
         </div>

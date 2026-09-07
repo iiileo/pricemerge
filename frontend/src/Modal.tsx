@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type MouseEvent } from 'react'
 
 const EXIT_MS = 180
 
@@ -13,10 +13,8 @@ export function Modal({ open, onClose, children }: ModalProps) {
   const [mounted, setMounted] = useState(open)
   const [phase, setPhase] = useState<'enter' | 'show' | 'leave'>(open ? 'enter' : 'leave')
   const [cache, setCache] = useState(children)
-
-  useEffect(() => {
-    if (open) setCache(children)
-  }, [open, children])
+  const childrenRef = useRef(children)
+  childrenRef.current = children
 
   useEffect(() => {
     if (open) {
@@ -28,6 +26,8 @@ export function Modal({ open, onClose, children }: ModalProps) {
       return () => window.cancelAnimationFrame(id)
     }
     if (!mounted) return
+    // 关闭时冻结内容，避免离场动画高度塌缩；打开时直接渲染 children，避免打断输入法
+    setCache(childrenRef.current)
     setPhase('leave')
     const t = window.setTimeout(() => setMounted(false), EXIT_MS)
     return () => window.clearTimeout(t)
@@ -49,7 +49,7 @@ export function Modal({ open, onClose, children }: ModalProps) {
         role="dialog"
         aria-modal="true"
       >
-        {cache}
+        {phase === 'leave' ? cache : children}
       </div>
     </div>
   )

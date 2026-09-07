@@ -13,14 +13,16 @@ import (
 
 // PriceService updates 出/接 大琪 prices in the base workbook.
 type PriceService struct {
-	mu        sync.Mutex
-	wb        *workbookIndex
-	basePath  string
-	mapping   map[string]string // 其他表名称 -> 基础表名称
-	dirty     bool
-	log       *appLog
-	pending   *pendingBatch
-	lastApply *batchApplyState
+	mu          sync.Mutex
+	wb          *workbookIndex
+	basePath    string
+	mappingPath string
+	mapping     map[string]string // 其他表名称 -> 基础表名称
+	dirty       bool
+	log         *appLog
+	pending     *pendingBatch
+	lastApply   *batchApplyState
+	restored    bool
 }
 
 type pendingBatch struct {
@@ -157,14 +159,23 @@ type BatchApplyResult struct {
 func (s *PriceService) LoadBase(path string) (StatusInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.restored = true
 
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return StatusInfo{}, fmt.Errorf("请选择基础表文件")
 	}
+	if err := s.loadBaseLocked(path); err != nil {
+		return StatusInfo{}, err
+	}
+	s.persistPrefsLocked()
+	return s.statusLocked(), nil
+}
+
+func (s *PriceService) loadBaseLocked(path string) error {
 	wb, err := openWorkbook(path)
 	if err != nil {
-		return StatusInfo{}, err
+		return err
 	}
 	if s.wb != nil {
 		_ = s.wb.close()
@@ -174,31 +185,40 @@ func (s *PriceService) LoadBase(path string) (StatusInfo, error) {
 	s.dirty = false
 	s.pending = nil
 	s.lastApply = nil
-	return s.statusLocked(), nil
+	return nil
 }
 
 // LoadMapping loads a two-column name mapping sheet: 其他表名称 | 基础表名称.
 func (s *PriceService) LoadMapping(path string) (StatusInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.restored = true
 
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return StatusInfo{}, fmt.Errorf("请选择映射表文件")
 	}
+	if err := s.loadMappingLocked(path); err != nil {
+		return StatusInfo{}, err
+	}
+	s.persistPrefsLocked()
+	return s.statusLocked(), nil
+}
+
+func (s *PriceService) loadMappingLocked(path string) error {
 	f, err := excelize.OpenFile(path)
 	if err != nil {
-		return StatusInfo{}, fmt.Errorf("打开映射表失败: %w", err)
+		return fmt.Errorf("打开映射表失败: %w", err)
 	}
 	defer f.Close()
 
 	sheets := f.GetSheetList()
 	if len(sheets) == 0 {
-		return StatusInfo{}, fmt.Errorf("映射表没有工作表")
+		return fmt.Errorf("映射表没有工作表")
 	}
 	rows, err := f.GetRows(sheets[0])
 	if err != nil {
-		return StatusInfo{}, err
+		return err
 	}
 
 	m := make(map[string]string)
@@ -218,21 +238,53 @@ func (s *PriceService) LoadMapping(path string) (StatusInfo, error) {
 		m[from] = to
 	}
 	s.mapping = m
-	return s.statusLocked(), nil
+	s.mappingPath = path
+	return nil
 }
 
 // ClearMapping clears the name mapping.
 func (s *PriceService) ClearMapping() StatusInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.restored = true
 	s.mapping = nil
+	s.mappingPath = ""
+	s.persistPrefsLocked()
 	return s.statusLocked()
+}
+
+func (s *PriceService) persistPrefsLocked() {
+	savePrefs(appPrefs{
+		BasePath:    s.basePath,
+		MappingPath: s.mappingPath,
+	})
+}
+
+// restoreLastFilesLocked reloads previously chosen base/mapping if files still exist.
+func (s *PriceService) restoreLastFilesLocked() {
+	p := loadPrefs()
+	if p.BasePath != "" {
+		if _, err := os.Stat(p.BasePath); err != nil || s.loadBaseLocked(p.BasePath) != nil {
+			s.basePath = ""
+		}
+	}
+	if p.MappingPath != "" {
+		if _, err := os.Stat(p.MappingPath); err != nil || s.loadMappingLocked(p.MappingPath) != nil {
+			s.mapping = nil
+			s.mappingPath = ""
+		}
+	}
+	s.persistPrefsLocked()
 }
 
 // Status returns current load state.
 func (s *PriceService) Status() StatusInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.restored {
+		s.restored = true
+		s.restoreLastFilesLocked()
+	}
 	return s.statusLocked()
 }
 
@@ -414,6 +466,46 @@ func (s *PriceService) ClearPendingBatch() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pending = nil
+}
+
+// RemovePendingBatchItem removes one preview row by index; it will not be applied.
+func (s *PriceService) RemovePendingBatchItem(index int) (BatchPreviewResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.pending == nil || len(s.pending.Items) == 0 {
+		return BatchPreviewResult{OK: false, Message: "没有可删除的预览项"}, nil
+	}
+	if index < 0 || index >= len(s.pending.Items) {
+		return BatchPreviewResult{}, fmt.Errorf("预览项索引无效")
+	}
+	items := make([]BatchPreviewItem, 0, len(s.pending.Items)-1)
+	items = append(items, s.pending.Items[:index]...)
+	items = append(items, s.pending.Items[index+1:]...)
+	if len(items) == 0 {
+		s.pending = nil
+		return BatchPreviewResult{
+			OK:       true,
+			Message:  "已清空预览",
+			Kind:     "",
+			FileName: "",
+			Items:    nil,
+		}, nil
+	}
+	matched := 0
+	for _, it := range items {
+		if it.Matched {
+			matched++
+		}
+	}
+	s.pending.Items = items
+	return BatchPreviewResult{
+		OK:       true,
+		Message:  fmt.Sprintf("共 %d 条，可匹配 %d 条", len(items), matched),
+		Kind:     s.pending.Kind,
+		FileName: s.pending.FileName,
+		Items:    items,
+	}, nil
 }
 
 // ApplyPendingBatch writes pending preview items into the base workbook.

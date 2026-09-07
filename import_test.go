@@ -35,11 +35,40 @@ func TestPreviewAndApplyBatch(t *testing.T) {
 		t.Fatal("preview should not dirty")
 	}
 
+	// remove the unmatched item; it must not appear in apply result
+	removeIdx := -1
+	for i, it := range prev.Items {
+		if it.Name == "不存在的烟" {
+			removeIdx = i
+			break
+		}
+	}
+	if removeIdx < 0 {
+		t.Fatal("expected 不存在的烟 in preview")
+	}
+	afterDel, err := s.RemovePendingBatchItem(removeIdx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterDel.Items) != len(prev.Items)-1 {
+		t.Fatalf("remove: %#v", afterDel)
+	}
+	for _, it := range afterDel.Items {
+		if it.Name == "不存在的烟" {
+			t.Fatal("removed item still present")
+		}
+	}
+
 	applied, err := s.ApplyPendingBatch()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if applied.Updated < 1 || applied.Missed < 1 {
+	for _, row := range applied.Rows {
+		if row.Name == "不存在的烟" {
+			t.Fatalf("removed item was applied: %#v", row)
+		}
+	}
+	if applied.Updated < 1 || applied.Missed != 0 {
 		t.Fatalf("apply: %#v", applied)
 	}
 	hasChange := false
