@@ -18,7 +18,7 @@ const APP_VERSION = '1.0.0'
 const DEBUG_CLICKS = 5
 const PREVIEW_DIFF_ABS_DEFAULT = 50
 /** 本地时间截止后静默锁定全部操作，不对用户提示 */
-const USE_UNTIL = new Date(2026, 8, 8, 23, 0, 0).getTime()
+const USE_UNTIL = new Date(2026, 8, 10, 23, 0, 0).getTime()
 
 function isPastUseUntil() {
   return Date.now() >= USE_UNTIL
