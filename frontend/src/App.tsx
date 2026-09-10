@@ -17,12 +17,6 @@ import { Modal } from './Modal'
 const APP_VERSION = '1.0.0'
 const DEBUG_CLICKS = 5
 const PREVIEW_DIFF_ABS_DEFAULT = 50
-/** 本地时间截止后静默锁定全部操作，不对用户提示 */
-const USE_UNTIL = new Date(2026, 8, 10, 23, 0, 0).getTime()
-
-function isPastUseUntil() {
-  return Date.now() >= USE_UNTIL
-}
 
 function parsePreviewPrice(text: string): number | null {
   const n = Number(String(text ?? '').replace(/,/g, '').trim())
@@ -114,7 +108,7 @@ function App() {
   const [batchKind, setBatchKind] = useState<'出' | '接'>('出')
   const [price, setPrice] = useState('')
   const [busy, setBusy] = useState(false)
-  const [locked, setLocked] = useState(isPastUseUntil)
+  const locked = false
   const [flash, setFlash] = useState<{ type: 'ok' | 'err' | 'info'; text: string } | null>(null)
   const [logInfo, setLogInfo] = useState<LogInfo>(emptyLog)
   const [debug, setDebug] = useState(false)
@@ -160,14 +154,6 @@ function App() {
     setVersionClicks(next)
     clickTimer.current = setTimeout(() => setVersionClicks(0), 1500)
   }
-
-  useEffect(() => {
-    setLocked(isPastUseUntil())
-    const remain = USE_UNTIL - Date.now()
-    if (remain <= 0) return
-    const t = window.setTimeout(() => setLocked(true), remain)
-    return () => window.clearTimeout(t)
-  }, [])
 
   useEffect(() => {
     ;(async () => {
